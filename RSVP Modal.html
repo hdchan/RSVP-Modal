@@ -1,0 +1,355 @@
+<html>
+<head>
+	<link rel="stylesheet" href="remodal.css">
+ 	<link rel="stylesheet" href="remodal-default-theme.css">
+ 	<style>
+ 		.remodal-confirm.disabled, .remodal-confirm.disabled:hover {
+ 			background-color:grey;
+ 			cursor:not-allowed;
+ 		}
+ 	</style>
+ 	<script src="http://ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
+ 	<script src="remodal.js"></script>
+</head>
+<body>
+	<a href="#rsvp">Modal</a><br>
+	<div class="remodal" data-remodal-id="rsvp" data-remodal-options="closeOnOutsideClick: false">
+		<button data-remodal-action="close" class="remodal-close"></button>
+		<div id="dynamic-rsvp-form">
+			<h1>Search RSVP</h1>
+			<p>Please fill out the information as it is written on your invitation</p>
+			<p>
+			<form class="pure-form" id="rsvp-form">
+				<p><input type="text" id="firstname" class="form-control" tabindex=1 placeholder="First Name">
+				<input type="text" id="lastname" class="form-control" tabindex=2 placeholder="Last Name">
+				</p>
+				<p>
+				<input type="text" id="zipcode" class="form-control" tabindex=3 placeholder="Zip Code">
+				</p>
+			</form>
+			</p>
+		</div>
+		<br>
+		<button class="remodal-confirm" id="confirm" state="search">Search</button>
+		<br>
+		<div id="error-message" style="display:none;font-style:italic">error</div>
+    </div>
+    <script src="http://www.parsecdn.com/js/parse-1.6.14.min.js"></script>
+    <script>
+		$(document).ready(function(){
+			Parse.initialize('<key>', '<key>')
+			var guestList
+			var gid
+			var guestClass = "GuestTest"
+			var commentClass = "CommentTest"
+
+			function submitted() {
+				var submitted = true
+				$.each(guestList, function(index, parseObject){
+					var guest = parseObject
+					if (!guest.get('submitted')) {
+						submitted = false;
+					}
+				});
+				return submitted;
+			}
+
+			$('#confirm').click(function(){
+
+				var confirmButton = $(this)
+
+				function displayError(string) {
+					$('#error-message').html('<p style="margin-top:16px;margin-bottom:0px;">'+string+'</p>')
+					$('#error-message').css('display','inline')
+				}
+				function hideError() {
+					$('#error-message').css('display','none')
+				}
+
+				function displayDynamicContent(html) {
+					$('#dynamic-rsvp-form').html(html)
+				}
+				function startLoadingState(feedbackString) {
+					confirmButton.html(feedbackString)
+					confirmButton.attr('disabled', 'disabled')
+					confirmButton.addClass('disabled', 'disabled')
+				}
+				function endLoadingState(feedbackString) {
+					confirmButton.html(feedbackString)
+					confirmButton.removeAttr('disabled')
+					confirmButton.removeClass('disabled')
+				}
+
+
+				hideError()
+
+				if (confirmButton.attr('state') == 'search') {
+					startLoadingState('Searching...')
+					searchUser(function(list){
+						// successfully found guest
+						guestList = list // saving for later use
+						confirmButton.attr('state', 'submit')
+						endLoadingState('Submit')
+
+						confirmButton.addClass('disabled', 'disabled')
+						confirmButton.attr('disabled', 'disabled')
+
+						displayDynamicContent(buildGuestList())
+						$('#confirm-submit').bind('change', function() {
+							if($(this).is(":checked")) {
+								$('#confirm').removeAttr('disabled')
+								$('#confirm').removeClass('disabled')
+							} else {
+								$('#confirm').attr('disabled', 'disabled')
+								$('#confirm').addClass('disabled')
+							}
+						});
+					}, function(errorMessage){
+						// search failed or no search found
+						endLoadingState('Search')
+						displayError('Sorry, we couldn\'t find your RSVP<br>If you\'re having trouble, please email <a href="mailto:{text:Email}">{text:Email}</a>')
+					})
+				} else if (confirmButton.attr('state') == 'submit') {
+					startLoadingState('Submitting...')
+					submit(function(object){ // success
+						console.log('Save successful')
+						//console.log(object)
+						confirmButton.attr('state', 'close')
+						endLoadingState('Close')
+						displayDynamicContent(buildFinishedMessage())
+					}, function(error){ // failed state
+						console.log('Failed to save')
+						//console.log(error)
+						confirmButton.attr('state', 'close')
+						endLoadingState('Close')
+						displayError('Something went wrong, please refresh the page and try again<br>If you\'re having trouble, please email <a href="mailto:{text:Email}">{text:Email}</a>')
+					}, function(validationNote) {
+						confirmButton.attr('state', 'submit')
+						endLoadingState('Submit')
+						displayError(validationNote)
+					})
+				} else if (confirmButton.attr("state") == "close") {
+					var inst = $('[data-remodal-id=rsvp]').remodal();
+					inst.close();
+				}
+
+			});
+
+			function searchUser(success, failure) {
+				var gidQuery = new Parse.Query(guestClass)
+				var firstname = $('#firstname').val().trim()
+				var lastname = $('#lastname').val().trim()
+				var zip = $('#zipcode').val().trim()
+				gidQuery.equalTo('firstName', firstname.toLowerCase()).equalTo('lastName', lastname.toLowerCase()).equalTo('zip', zip.toLowerCase()).first()
+				gidQuery.find({
+					success: function(user) {
+						// results is an array of Parse.Object.
+						if (user.length == 1) {
+							gid = user[0].get('gid'); // should be one result
+							var groupQuery = new Parse.Query(guestClass)
+							groupQuery.ascending("createdAt");
+							groupQuery.equalTo('gid', gid).addAscending('firstName').find({ // getting everyone in group
+								success:function(guestObjects) {
+									if (guestObjects.length > 0) { // at least one person
+										success(guestObjects)
+									} else { // no group list
+										failure('No group found')
+									}
+								},
+								error: function(error) {
+									// error is an instance of Parse.Error.
+									failure(error)
+								}
+							});
+						} else { // no user found
+							failure('Not correct user count: ' + user.length)
+						}
+					},
+					error: function(error) {
+						// error is an instance of Parse.Error.
+						failure(error)
+					}
+				});
+			}
+
+			function submit(success, failure, validation) {
+
+				function submitGuestList(success, failure) {
+					var valid = true
+					$.each(guestList, function(index, parseObject){
+						var guest = parseObject
+						// var attending = $('#'+guest.id+'_attending').is(':checked');
+						if (!validAttendingField(guest.id)) {
+								valid = false
+								return false
+						}
+						var attending = $('[name="'+guest.id+'_attending"]:checked').val() == "yes"
+						// var comments = $('#'+guest.id+'_comments').val();
+						guest.set('attending', attending)
+						guest.set('submitted', true)
+					});
+					if (!valid) {
+						validation('Please check if you\'re able to attend or not')
+						return
+					}
+
+					if ($('#comments').val().length > 0) {
+						var comments = new Parse.Object(commentClass)
+						comments.set('gid', gid)
+						comments.set('comment', $('#comments').val())
+						guestList.push(comments)
+					}
+
+					Parse.Object.saveAll(guestList, {
+						success: function(guestObj) {
+							// All the objects were saved.
+							success(guestObj)
+						},
+						error: function(error) {
+							// An error occurred while saving one of the objects.
+							failure(error)
+						},
+					});
+				}
+				function validAttendingField(guestID) {
+					return $('[name="'+guestID+'_attending"][value="yes"]').is(':checked') || $('[name="'+guestID+'_attending"][value="no"]').is(':checked')
+				}
+				function submitComment(success, failture) {
+					var comments = new Parse.Object(commentClass)
+					comments.set('gid', gid)
+					comments.set('comment', $('#comments').val())
+					comments.save().then(function(commentObj) {
+						success(commentObj)
+					}, function (error) {
+						failure(error)
+					});
+				}
+
+				if (submitted()) { // response was previously submitted
+					submitComment(function(commentObj){
+						success(commentObj)
+					},
+					function(error){
+						failure(error)
+					})
+				} else { // new submission
+					submitGuestList(function(guestObjs){
+						// submission success
+						success(guestObjs)
+					}, function(error){
+						// submission failed
+						failure(error)
+					})
+				}
+			}
+
+			function buildGuestList() {
+				var html = '<h1>your rsvp</h1>';
+				if (submitted()) {
+					html = html
+					+ '<p>'
+					+ '<table style="margin:auto;">'
+						+ '<tr>'
+							+ '<th align="left">Name</th>'
+							+ '<th style="width:50px;">&nbsp;</th>'
+							+ '<th></th>'
+						+ '</tr>'
+
+					$.each(guestList, function(index, parseObject){
+						var guest = parseObject
+						html = html
+						+ '<tr>'
+							+ '<td align="left" class="first-name-cell">'
+								+ guest.get('firstName')
+								+ ' '
+								+ guest.get('lastName')
+							+ '</td>'
+							+ '<td></td>'
+
+							html = html + '<td align="center">'
+
+							if (guest.get('attending')) {
+								html = html + 'I\'ll be there!'
+							} else {
+								html = html + 'Sorry to miss it'
+							}
+							html = html
+							+ '</td>'
+						+ '</tr>'
+
+
+					});
+
+					html = html + '</table>'
+					+ '<br>'
+
+
+					+ '<p><u><i>You have previously submitted an RSVP</i></u></p><p>If you\'d like to make any additional requests or changes, please indicate it in the comment box</p>'
+
+				}
+
+				else {
+					html = html
+					+ '<p>'
+					+ '<table style="margin:auto;">'
+						+ '<tr>'
+							+ '<th align="left">Name</th>'
+							+ '<th style="width:50px;">&nbsp;</th>'
+							+ '<th>I\'ll be there!</th>'
+							+ '<th style="width:50px;">&nbsp;</th>'
+							+ '<th>Sorry to miss it</th>'
+						+ '</tr>'
+
+					$.each(guestList, function(index, parseObject){
+						var guest = parseObject
+						html = html
+						+ '<tr>'
+							+ '<td align="left" class="first-name-cell">'
+							+ guest.get('firstName') + ' '
+							+ guest.get('lastName')
+							+ '</td>'
+							+ '<td></td>'
+
+
+						html = html
+						+ '<td align="center">'
+							+ '<input type="radio" name="'+guest.id+'_attending" value="yes">'
+						+ '</td>'
+						+ '<td></td>'
+						+ '<td align="center">'
+							+ '<input type="radio" name="'+guest.id+'_attending" value="no">'
+						+ '</td>'
+
+					});
+					html = html
+					+ '</table>'
+					+ '<br>'
+
+					/*+ '<p>Please confirm if you '
+
+					if (guestList.length > 1) {
+						html = html + '(and your guests) '
+					}
+					
+					html = html + 'are attending</p>'
+					*/
+					html = html
+					+ '<p>If you have any dietary restrictions or allergies, please indicate it in the comment box</p>'
+
+				}
+
+				html = html
+				+ '<br><textarea rows="5" style="max-width:350px;width:100%;" id="comments" style="resize:vertical;"></textarea></p>'
+				+ '<p><input type="checkbox" id="confirm-submit"> I am ready to submit my RSVP</p>'
+
+				return html
+			}
+
+			function buildFinishedMessage() {
+				return '<h1>thank you!</h1><p>Your response has been submitted</p>'
+			}
+
+		});
+	</script>
+</body>
+</html>
